@@ -3,13 +3,14 @@
 #include <assert.h>
 #include "kmeans.h"
 
+/*
+ * data       [nvectors  * ndims]
+ * clusters   [nclusters * ndims]
+ * membership [nvectors]
+ */
 __global__ void
-kmeans_kernel(const float *data,       // [nvectors * ndims]
-			  const float *clusters,   // [nclusters * ndims]
-			        int   *membership, // [nvectors]
-			        long   nvectors,
-			        int    ndims,
-			        int    nclusters) 
+kmeans_kernel(const float *data, const float *clusters, int *membership,
+		long nvectors, int ndims, int nclusters)
 {
 	const unsigned int point = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -34,19 +35,18 @@ kmeans_kernel(const float *data,       // [nvectors * ndims]
 	}
 }
 
-int 
-run_kmeans(const float *h_data,             // [nvectors * ndims]
-		   const float *d_data,                                   
-		         float *h_clusters,         // [nclusters * ndims]
-		         float *d_clusters,                               
-		         int   *h_membership,       // [nvectors]
-		         int   *d_membership,                             
-		         int   *h_clusters_members, // [nclusters]
-		         float *h_clusters_sums,    // [nclusters * ndims]
-		         long   nvectors,
-		         int    ndims,
-		         int    nclusters,
-		         int    niters)
+/*
+ * [hd]_data          [nvectors  * ndims]
+ * [hd]_clusters      [nclusters * ndims]
+ * [hd]_membership    [nvectors]
+ * h_clusters_members [nclusters]
+ * h_clusters_sums    [nclusters * ndims]
+ */
+int
+run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
+		float *d_clusters, int *h_membership, int *d_membership,
+		int *h_clusters_members, float *h_clusters_sums, long nvectors,
+		int ndims, int nclusters, int niters)
 {
 	int thread_points = 1;
 	int threadsPerBlock = 64;
@@ -102,14 +102,15 @@ run_kmeans(const float *h_data,             // [nvectors * ndims]
 	return 0;
 }
 
+/*
+ * data               [nvectors  * ndims]
+ * membership         [nvectors]
+ * h_clusters_members [nclusters]
+ * h_clusters_sums    [nclusters * ndims]
+ */
 void
-cpu_sum_clusters(const float *data,             // [nvectors * ndims]
-				 const int   *membership,       // [nvectors]
-				       int   *clusters_members, // [nclusters]
-				       float *clusters_sums,    // [nclusters * ndims],
-				       long	  nvectors,
-				       int 	  ndims,
-				       int 	  nclusters)
+cpu_sum_clusters(const float *data, const int *membership, int *clusters_members,
+		float *clusters_sums, long nvectors, int ndims, int nclusters)
 {
 	for (int i = 0; i < nvectors; i++) {
 		int cluster = membership[i];
@@ -119,25 +120,23 @@ cpu_sum_clusters(const float *data,             // [nvectors * ndims]
 	}
 }
 
+/*
+ * [hd]_data          [nvectors  * ndims]
+ * [hd]_clusters      [nclusters * ndims]
+ * [hd]_membership    [nvectors]
+ * h_clusters_members [nclusters]
+ * h_clusters_sums    [nclusters * ndims]
+ */
 int
-setup_data(float **h_data,             // [nvectors * ndims]
-		   float **d_data,
-		   float **h_clusters,         // [nclusters * ndims]
-		   float **d_clusters,
-		   int   **h_membership,       // [nvectors]
-		   int   **d_membership,
-		   int   **h_clusters_members, // [nclusters]
-		   float **h_clusters_sums,    // [nclusters * ndims]
-		   long    nvectors,
-		   int     ndims,
-		   int     nclusters,
-		   const char *infile)
+setup_data(float **h_data, float **d_data, float **h_clusters, float **d_clusters,
+		int **h_membership, int **d_membership, int **h_clusters_members,
+		float **h_clusters_sums, long nvectors, int ndims, int nclusters, const char *infile)
 {
 	*h_data = (float *)malloc(nvectors * ndims * sizeof(float));
-    if (*h_data == NULL) {
-        fprintf(stderr, "malloc h_data failed\n");
+	if (*h_data == NULL) {
+		fprintf(stderr, "malloc h_data failed\n");
 		return 1;
-    }
+	}
 
 	int errr = read_data(h_data, nvectors * ndims * sizeof(float), infile);
 	if (errr) {
@@ -145,57 +144,57 @@ setup_data(float **h_data,             // [nvectors * ndims]
 		return 1;
 	}
 
-    cudaError_t err = cudaMalloc(d_data, nvectors * ndims * sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "cudamalloc d_data error %s\n", cudaGetErrorString(err));
-        return 1;
-    }
+	cudaError_t err = cudaMalloc(d_data, nvectors * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_data error %s\n", cudaGetErrorString(err));
+		return 1;
+	}
 
-    err = cudaMemcpy(*d_data, *h_data, nvectors * ndims * sizeof(float), cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
-        return 1;
-    }
+	err = cudaMemcpy(*d_data, *h_data, nvectors * ndims * sizeof(float), cudaMemcpyHostToDevice);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
+		return 1;
+	}
 
 	*h_clusters = (float *)malloc(nclusters * ndims * sizeof(float));
-    if (*h_clusters == NULL) {
-        fprintf(stderr, "malloc h_clusters failed\n");
+	if (*h_clusters == NULL) {
+		fprintf(stderr, "malloc h_clusters failed\n");
 		return 1;
-    }
+	}
 
 	for (int i = 0; i < nclusters; i++)
 		for (int j = 0; j < ndims; j++)
 			(*h_clusters)[i * ndims + j] = (*h_data)[i * ndims + j];
 
-    err = cudaMalloc(d_clusters, nclusters * ndims * sizeof(float));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "cudamalloc d_clusters error %s\n", cudaGetErrorString(err));
-        return -1;
-    }
+	err = cudaMalloc(d_clusters, nclusters * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_clusters error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
 
 	*h_membership = (int *)malloc(nvectors * sizeof(int));
-    if (*h_membership == NULL) {
-        fprintf(stderr, "malloc h_membership failed\n");
+	if (*h_membership == NULL) {
+		fprintf(stderr, "malloc h_membership failed\n");
 		return -1;
-    }
+	}
 
-    err = cudaMalloc(d_membership, nvectors * sizeof(int));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
-        return -1;
-    }
+	err = cudaMalloc(d_membership, nvectors * sizeof(int));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
 
 	*h_clusters_members = (int *)malloc(nclusters * sizeof(int));
-    if (*h_clusters_members == NULL) {
-        fprintf(stderr, "malloc h_clusters_members failed\n");
+	if (*h_clusters_members == NULL) {
+		fprintf(stderr, "malloc h_clusters_members failed\n");
 		return -1;
-    }
+	}
 
 	*h_clusters_sums = (float *)malloc(nclusters * ndims * sizeof(float));
-    if (*h_clusters_sums == NULL) {
-        fprintf(stderr, "malloc h_clusters_sums failed\n");
+	if (*h_clusters_sums == NULL) {
+		fprintf(stderr, "malloc h_clusters_sums failed\n");
 		return -1;
-    }
+	}
 
 	return 0;
 }
@@ -204,7 +203,7 @@ int
 main(int argc, char *argv[])
 {
 	if (argc != 6) {
-        printf("usage: ./kmeans <infile> <vectors> <dimensions> <clusters> <iterations>\n");
+		printf("usage: ./kmeans <infile> <vectors> <dimensions> <clusters> <iterations>\n");
 		return 1;
 	}
 
