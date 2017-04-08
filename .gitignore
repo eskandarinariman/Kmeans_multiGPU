@@ -1,0 +1,6 @@
+*.o
+*.log
+kmeans_*
+mpi_kmeans_*
+data_gen
+!*kmeans*.[ch]*

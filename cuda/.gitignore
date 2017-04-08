@@ -1,6 +1,0 @@
-*.o
-kmeans_one_vector
-kmeans_max_threads
-kmeans_coalesce
-data_gen
-*.log
