@@ -17,9 +17,9 @@ debug: ccflags  += -g
 debug: nvflags  += -g
 debug: $(kmeans) data_gen
 
+# following line also works (need -L to add -lcudart)
+# gcc -o $@ $^ -L/usr/local/cuda-8.0/lib64 -lcudart
 $(kmeans): %: %.o util.o
-	# this also works (need -L to add -lcudart LD_ too late)
-	#gcc -o $@ $^ -L/usr/local/cuda-8.0/lib64 -lcudart
 	nvcc $(nvflags) -o $@ $^
 
 kmeans_one_vector.o: kmeans.cu
