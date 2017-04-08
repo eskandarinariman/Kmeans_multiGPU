@@ -1,3 +1,4 @@
+LD_LIBRARY_PATH?=/usr/local/cuda-8.0
 MPI_HOME?=~/MPI
 CUDA_HOME?=/usr/local/cuda-8.0
 
@@ -35,3 +36,8 @@ $(kmeans): %: %.o util.o mpi_hello_world.o Makefile
 clean:
 	rm -rf *.o $(kmeans)
 
+# this is just a default/example run
+# export LD_LIBRARY_PATH for linking on other machines
+# -rf <file> specifies hosts and ranks/slots to run on
+run: mpi_kmeans_one_vector
+	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi mpi_kmeans_one_vector /tmp/data 3800000 256 2 5
