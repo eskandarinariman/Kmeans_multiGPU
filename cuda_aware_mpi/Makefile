@@ -1,32 +1,37 @@
-MPICC=~/MPI/bin/mpicc
-MPILD=~/MPI/bin/mpic++
-NVCC=$(PREP) nvcc
+MPI_HOME?=~/MPI
+CUDA_HOME?=/usr/local/cuda-8.0
 
-#CFLAGS=-std=c99 -march=native -Wall
-MPICFLAGS=-I${MPI_HOME}/include
-CUDACFLAGS=-I${CUDA_INSTALL_PATH}/include
+MPICC=${MPI_HOME}/bin/mpicc
+NVCC=nvcc
+CC=gcc
 
-NVCCFLAGS=-Xcompiler -march=native
+CCFLAGS =-Wall
+MPICCFLAGS=
+NVCCFLAGS=-arch sm_52
+NVLDFLAGS=-L${CUDA_HOME}/lib64 -lcudart
 
+kmeans = mpi_kmeans_one_vector
+kmeans += mpi_kmeans_max_threads
+kmeans += mpi_kmeans_coalesce
 
+default: $(kmeans)
 
-CUDALDFLAGS=-L${CUDA_INSTALL_PATH}/lib64 -lcudart
+mpi_kmeans_one_vector.o: DFLAGS=-DONE_VECTOR
+mpi_kmeans_max_threads.o: DFLAGS=-DMAX_THREADS
+mpi_kmeans_coalesce.o: DFLAGS=-DCOALESCE
 
-all: kmeans.o mpi_hello_world.o mpi_kmeans
+$(kmeans:=.o): kmeans.h kmeans.cu Makefile
+	$(NVCC) $(NVCCFLAGS) -c $(DFLAGS) kmeans.cu -o $@
 
-kmeans.o: kmeans.h kmeans.cu Makefile
-	$(NVCC) $(MPICFLAGS) $(NVCCFLAGS) -c kmeans.cu -o kmeans.o
-
-util.o: kmeans.h util.cu Makefile
-	$(NVCC) $(MPICFLAGS) $(NVCCFLAGS) -c util.cu -o util.o
+util.o: kmeans.h util.c Makefile
+	$(CC) $(CCFLAGS) -c util.c
 
 mpi_hello_world.o: mpi_hello_world.c Makefile
-	$(MPICC) $(MPICFLAGS) $(CUDACFLAGS) $(CFLAGS) -c mpi_hello_world.c -o mpi_hello_world.o
+	$(MPICC) -c mpi_hello_world.c
 
-mpi_kmeans: kmeans.o util.o mpi_hello_world.o Makefile
-	$(MPICC) $(CUDALDFLAGS) -o mpi_kmeans kmeans.o util.o mpi_hello_world.o 
-
+$(kmeans): %: %.o util.o mpi_hello_world.o Makefile
+	$(MPICC) -o $@ $@.o util.o mpi_hello_world.o $(NVLDFLAGS)
 
 clean:
-	rm -rf *.o mpi_kmeans
+	rm -rf *.o $(kmeans)
 
