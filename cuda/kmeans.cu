@@ -1,37 +1,66 @@
 #include <stdio.h>
 #include <time.h>
 #include <assert.h>
+extern "C" {
 #include "kmeans.h"
+}
 
 /*
  * data       [nvectors  * ndims]
  * clusters   [nclusters * ndims]
  * membership [nvectors]
  */
-__global__ void
-kmeans_kernel(const float *data, const float *clusters, int *membership,
-		long nvectors, int ndims, int nclusters)
+__device__ inline void
+vector_dist(unsigned int vector, const float *data, const float *clusters,
+		int *membership, int ndims, int nclusters)
 {
-	const unsigned int point = blockIdx.x * blockDim.x + threadIdx.x;
+	int index = -1;
+	float min_dist = FLT_MAX;
 
-	if (point < nvectors) {
-		int index = -1;
-		float min_dist = FLT_MAX;
+	for (int i = 0; i < nclusters; i++) {
+		float dist = 0.0;
 
-		for (int i = 0; i < nclusters; i++) {
-			float dist = 0.0;
-
-			for (int j = 0; j < ndims; j++) {
-				float diff = data[point * ndims + j] - clusters[i * ndims + j];
-				dist += diff * diff;
-			}
-
-			if (dist < min_dist) {
-				min_dist = dist;
-				index    = i;
-			}
+		for (int j = 0; j < ndims; j++) {
+			float diff = data[vector * ndims + j] - clusters[i * ndims + j];
+			dist += diff * diff;
 		}
-		membership[point] = index;
+
+		if (dist < min_dist) {
+			min_dist = dist;
+			index    = i;
+		}
+	}
+	membership[vector] = index;
+}
+
+__global__ void
+kmeans_one_vector(const float *data, const float *clusters, int *membership,
+		int ndims, int nclusters)
+{
+	unsigned int vector = blockIdx.x * blockDim.x + threadIdx.x;
+	vector_dist(vector, data, clusters, membership, ndims, nclusters);
+}
+
+__global__ void
+kmeans_max_threads(const float *data, const float *clusters, int *membership,
+		int ndims, int nclusters, int nvectors, int thread_vectors)
+{
+	unsigned int start = (blockIdx.x * blockDim.x + threadIdx.x) * thread_vectors;
+	unsigned int end   = start + thread_vectors;
+	for (int vector = start; vector < end; vector++) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, membership, ndims, nclusters);
+	}
+}
+
+__global__ void
+kmeans_coalesce(const float *data, const float *clusters, int *membership,
+		int ndims, int nclusters, int nvectors, int threads)
+{
+	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int vector = tid; vector < nvectors; vector+=threads) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, membership, ndims, nclusters);
 	}
 }
 
@@ -48,11 +77,22 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		int *h_clusters_members, float *h_clusters_sums, long nvectors,
 		int ndims, int nclusters, int niters)
 {
-	int thread_points = 1;
-	int threadsPerBlock = 64;
-	assert(nvectors % thread_points == 0);
-	assert((nvectors / thread_points) % threadsPerBlock == 0);
-	int blocksPerGrid = (nvectors / thread_points) / threadsPerBlock;
+	//todo: make threadsPerBock and
+#ifdef ONE_VECTOR
+	int thread_vectors = 1;
+	int block_threads = 64;
+	assert(nvectors % thread_vectors == 0);
+	assert((nvectors / thread_vectors) % block_threads == 0);
+	int grid_blocks = (nvectors / thread_vectors) / block_threads;
+#elif MAX_THREADS || COALESCE
+	int grid_blocks = 128;
+	int block_threads = 16;
+	int threads = grid_blocks * block_threads;
+	assert(threads == 2048);
+#if MAX_THREADS
+	int thread_vectors = (nvectors + (threads - 1))/threads;
+#endif
+#endif
 
 	struct timespec start, end;
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -65,8 +105,16 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 			return -1;
 		}
 
-		kmeans_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_data, d_clusters,
-				d_membership, nvectors, ndims, nclusters);
+#ifdef ONE_VECTOR
+		kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+				d_membership, ndims, nclusters);
+#elif MAX_THREADS
+		kmeans_max_threads<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+				d_membership, ndims, nclusters, nvectors, thread_vectors);
+#elif COALESCE
+		kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+				d_membership, ndims, nclusters, nvectors, threads);
+#endif
 		err = cudaGetLastError();
 		if (err != cudaSuccess) {
 			fprintf(stderr, "kmeans_kernel error %s\n", cudaGetErrorString(err));
