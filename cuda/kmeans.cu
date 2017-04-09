@@ -1,8 +1,72 @@
 #include <stdio.h>
 #include <time.h>
 #include <assert.h>
+#include <iostream>
+#include <stdlib.h>
 extern "C" {
 #include "kmeans.h"
+}
+
+using namespace std;
+
+ __inline__ __device__
+float warpReduceSum(float val)
+{
+  for (int offset = warpSize/2; offset > 0; offset /= 2) 
+    val += __shfl_down(val, offset);
+  return val;
+}
+
+__inline__ __device__
+float blockReduceSum(float val)
+{
+  static __shared__ float shared[32]; // Shared mem for 32 partial sums
+  int lane = threadIdx.x % warpSize;
+  int wid = threadIdx.x / warpSize;
+
+  val = warpReduceSum(val);     // Each warp performs partial reduction
+
+  if (lane==0) shared[wid]=val; // Write reduced value to shared memory
+
+  __syncthreads();              // Wait for all partial reductions
+
+  //read from shared memory only if that warp existed
+  val = (threadIdx.x < blockDim.x / warpSize) ? shared[lane] : 0;
+
+  if (wid==0) val = warpReduceSum(val); //Final reduce within first warp
+
+  return val;
+}
+
+__global__ void deviceReduceKernel(float *in, float* out, int N, int nclusters, int ndims)
+{
+	//float sum[nclusters] = 0;
+	float* sum= (float*)malloc(sizeof(float)*nclusters);
+	//
+	for (int j = 0; j < ndims; j++){
+		//
+		for (int i = 0; i < N; i= i+ndims) {
+			//reduce multiple elements per thread
+			for (int i = blockIdx.x * blockDim.x + threadIdx.x; 
+					i < N; 
+					i += blockDim.x * gridDim.x) {
+				sum[j] += in[i*ndims+ j];
+			}
+
+			sum[j] = blockReduceSum(sum[j]);
+			if (threadIdx.x==0)
+				out[blockIdx.x *ndims +j]=sum[j];	
+		}
+	}
+}
+
+void deviceReduce(float *in, float* out, int N, int nclusters, int ndims)
+{
+  int threads = 512;
+  int blocks = min((N + threads - 1) / threads, 1024);
+
+  deviceReduceKernel<<<blocks, threads>>>(in, out, N, nclusters, ndims);
+  deviceReduceKernel<<<1, 1024>>>(out, out, blocks, nclusters, ndims);
 }
 
 /*
@@ -10,7 +74,7 @@ extern "C" {
  * clusters   [nclusters * ndims]
  * membership [nvectors]
  */
-__device__ inline void
+__inline__ __device__ void
 vector_dist(unsigned int vector, const float *data, const float *clusters,
 		int *membership, int ndims, int nclusters)
 {
@@ -61,6 +125,140 @@ kmeans_coalesce(const float *data, const float *clusters, int *membership,
 	for (int vector = tid; vector < nvectors; vector+=threads) {
 		if (vector < nvectors)
 			vector_dist(vector, data, clusters, membership, ndims, nclusters);
+	}
+}
+
+void
+GPU_sum_clusters(const float *data, const int *membership, int *clusters_members,
+		float *clusters_sums, long nvectors, int ndims, int nclusters)
+{
+	//N might be smaller for clusters
+	//int N= nvectors* ndims; 
+	int threads = 512;
+	//int blocks = min((N + threads - 1) / threads, 1024);
+
+	for (int i = 0; i < nvectors; i++) {
+		int cluster = membership[i];
+
+		//int data_num= clusters_members[cluster];
+
+		//for (int j = 0; j < ndims; j++)
+		//clusters_sums[cluster * ndims + j] += data[i * ndims + j];
+		//for (int j = 0; j < ndims; j++)
+		//h_data_clusters[cluster][data_num* ndims + j]= data[i * ndims + j];
+		clusters_members[cluster]++;		
+	}
+
+	float **d_data_clusters = NULL;
+	float **d_data_clusters_arrays = (float **)malloc(nclusters * sizeof(float*));
+	if (d_data_clusters_arrays == NULL) {
+		fprintf(stderr, "cudamalloc d_data_clusters_arrays error %s\n");
+		exit(1);
+	}
+	cudaError_t err = cudaMalloc(&d_data_clusters, nclusters * sizeof(float*));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_data_clusters_ptrs error %s\n", cudaGetErrorString(err));
+		exit(1);
+	}
+
+	for (int i = 0; i < nclusters; i++) {
+		unsigned int cluster_size = clusters_members[i];
+		printf("c[%d] = %u (bytes = %u)\n", i, cluster_size, cluster_size * ndims * sizeof(float));
+		err = cudaMalloc(&d_data_clusters_arrays[i], cluster_size * ndims * sizeof(float));
+		if (err != cudaSuccess) {
+			fprintf(stderr, "cudamalloc d_data_clusters[%d] error %s\n", i, cudaGetErrorString(err));
+			exit(1);
+		}
+	}
+	err = cudaMemcpy(d_data_clusters, d_data_clusters_arrays, nclusters * sizeof(float*),
+			cudaMemcpyHostToDevice);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy d_data_clusters_arrays error %s\n", cudaGetErrorString(err));
+		exit(1);
+	}
+
+	float **h_data_clusters = (float **)malloc(nclusters * sizeof(float*));
+
+	for (int i = 0; i < nclusters; i++) {
+		int cluster_size= clusters_members[i];
+		h_data_clusters[i] = (float *)malloc(cluster_size*ndims * sizeof(float));
+	}
+	/*
+	 *    for (int i = 0; i < nvectors; i++) {
+	 *        int cluster = membership[i];
+	 *
+	 *        int data_num= clusters_members[cluster];
+	 *
+	 *        for (int j = 0; j < ndims; j++)
+	 *            clusters_sums[cluster * ndims + j] += data[i * ndims + j];
+	 *        for (int j = 0; j < ndims; j++)
+	 *            h_data_clusters[cluster][data_num* ndims + j]= data[i * ndims + j];
+	 *
+	 *        clusters_members[cluster]++;		
+	 *    }
+	 */
+	float **h_out = (float **)malloc(nclusters * sizeof(float*));
+
+	for (int i = 0; i < nclusters; i++) {
+		int N = clusters_members[i];
+		int blocks = min((N + threads - 1) / threads, 1024);
+		h_out[i] = (float *)malloc(blocks *ndims* sizeof(float));
+	}
+
+	float **d_out = NULL;
+	err = cudaMalloc(d_out, (nclusters)*sizeof(float*));
+	if (err != cudaSuccess) {
+		cerr << "Error in allocating device output Array!" << endl;
+		cout << "Error is: " << cudaGetErrorString(err) << endl;
+		//return -1;
+	}
+	for (int i = 0; i < nclusters; i++) {
+		int N = clusters_members[i];
+		int blocks = min((N + threads - 1) / threads, 1024);
+		err = cudaMalloc(&d_out[i], blocks * ndims * sizeof(float));
+		if (err != cudaSuccess) {
+			fprintf(stderr, "cudamalloc d_out error %s\n", cudaGetErrorString(err));
+			//return 1;
+		}
+	}
+	//copy mem to device
+	for(int i = 0; i < nclusters; i++) {
+		int cluster_size = clusters_members[i];
+		err = cudaMemcpy(d_data_clusters[i], h_data_clusters[i],
+				cluster_size * ndims * sizeof(float), cudaMemcpyHostToDevice);
+		if (err != cudaSuccess) {
+			fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
+			exit(1);
+		}
+	}
+
+	err = cudaMemcpy(d_data_clusters, h_data_clusters, nclusters * sizeof(float*), cudaMemcpyHostToDevice);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
+	}
+	//deviceReduce(d_A, d_out, N);
+	for (int i = 0; i < nclusters; i++) {
+		int N = clusters_members[i];
+		deviceReduce(d_data_clusters[i], d_out[i], N*ndims, nclusters, ndims);
+		//cout<<"sum"<<d_out[i][0]<<endl;
+	}
+	//transfer back to host
+	for(int i = 0; i < nclusters; i++) {
+		int N = clusters_members[i];
+		int blocks = min((N + threads - 1) / threads, 1024);
+		err = cudaMemcpy(h_out[i], d_out[i], blocks * ndims * sizeof(float), cudaMemcpyDeviceToHost);
+		if (err != cudaSuccess) {
+			fprintf(stderr, "cudamemcpy d_out error %s\n", cudaGetErrorString(err));
+			//return 1;
+		}
+	}
+
+	err = cudaMemcpy(h_out, d_out, nclusters * sizeof(float), cudaMemcpyDeviceToHost);
+
+	for(int i = 0; i < nclusters; i++) {
+		for (int j = 0; j < ndims; j++)
+			clusters_sums[i * nclusters + j] = h_out[i][j];
+		//printf("result %f", h_out[i][0]);
 	}
 }
 
@@ -128,8 +326,13 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 			return -1;
 		}
 
+#if CPU_SUM
 		cpu_sum_clusters(h_data, h_membership, h_clusters_members,
 				h_clusters_sums, nvectors, ndims, nclusters);
+#elif GPU_SUM
+		GPU_sum_clusters(h_data, h_membership, h_clusters_members,
+				h_clusters_sums, nvectors, ndims, nclusters);
+#endif
 
 		for (int i = 0; i < nclusters; i++)
 			for (int j = 0; j < ndims; j++)
@@ -290,3 +493,4 @@ main(int argc, char *argv[])
 	cudaDeviceReset();
 	return err;
 }
+

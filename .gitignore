@@ -1,6 +1,5 @@
 *.o
 *.log
-kmeans_*
-mpi_kmeans_*
+*_cpu
+*_gpu
 data_gen
-!*kmeans*.[ch]*

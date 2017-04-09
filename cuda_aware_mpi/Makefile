@@ -11,15 +11,21 @@ MPICCFLAGS=
 NVCCFLAGS=-arch sm_52
 NVLDFLAGS=-L${CUDA_HOME}/lib64 -lcudart
 
-kmeans = mpi_kmeans_one_vector
-kmeans += mpi_kmeans_max_threads
-kmeans += mpi_kmeans_coalesce
+kmeans  = one_vector_cpu
+#kmeans += one_vector_gpu
+kmeans += max_threads_cpu
+#kmeans += max_threads_gpu
+kmeans += coalesce_cpu
+#kmeans += coalesce_gpu
 
 default: $(kmeans)
 
-mpi_kmeans_one_vector.o: DFLAGS=-DONE_VECTOR
-mpi_kmeans_max_threads.o: DFLAGS=-DMAX_THREADS
-mpi_kmeans_coalesce.o: DFLAGS=-DCOALESCE
+one_vector_cpu.o: DFLAGS=-DONE_VECTOR -DCPU_SUM
+one_vector_gpu.o: DFLAGS=-DONE_VECTOR -DGPU_SUM
+max_threads_cpu.o: DFLAGS=-DMAX_THREADS -DCPU_SUM
+max_threads_gpu.o: DFLAGS=-DMAX_THREADS -DGPU_SUM
+coalesce_cpu.o: DFLAGS=-DCOALESCE -DCPU_SUM
+coalesce_gpu.o: DFLAGS=-DCOALESCE -DGPU_SUM
 
 $(kmeans:=.o): kmeans.h kmeans.cu Makefile
 	$(NVCC) $(NVCCFLAGS) -c $(DFLAGS) kmeans.cu -o $@
