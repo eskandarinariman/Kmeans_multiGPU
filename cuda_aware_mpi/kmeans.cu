@@ -97,7 +97,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 	struct timespec start, end;
 	clock_gettime(CLOCK_MONOTONIC, &start);
 
-	for (int i = 0; i < niters; i++) {
+//	for (int i = 0; i < niters; i++) {
 		cudaError_t err = cudaMemcpy(d_clusters, h_clusters, nclusters * ndims * sizeof(float),
 				cudaMemcpyHostToDevice);
 		if (err != cudaSuccess) {
@@ -131,22 +131,14 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		cpu_sum_clusters(h_data, h_membership, h_clusters_members,
 				h_clusters_sums, nvectors, ndims, nclusters);
 
-		for (int i = 0; i < nclusters; i++)
-			for (int j = 0; j < ndims; j++)
-				h_clusters[i * ndims + j] = h_clusters_sums[i * ndims + j] / h_clusters_members[i];
-	}
+		// for (int i = 0; i < nclusters; i++)
+		// 	for (int j = 0; j < ndims; j++)
+		// 		h_clusters[i * ndims + j] = h_clusters_sums[i * ndims + j] / h_clusters_members[i];
+//	}
 
 	clock_gettime(CLOCK_MONOTONIC, &end);
 
-	for (int i = 0; i < nclusters; i++) {
-		printf("clusters[%d]:\n", i);
-		printf("%f", h_clusters[i * ndims + 0]);
-		for (int j = 1; j < ndims; j++)
-			printf(", %f", h_clusters[i * ndims + j]);
-		printf("\n");
-	}
-
-	printf("runtime = %luns\n", time_diff(start, end));
+	// printf("runtime = %luns\n", time_diff(start, end));
 	return 0;
 }
 
@@ -175,6 +167,43 @@ cpu_sum_clusters(const float *data, const int *membership, int *clusters_members
  * h_clusters_members [nclusters]
  * h_clusters_sums    [nclusters * ndims]
  */
+extern "C" int
+device_setup_data(float **h_data, float **d_data, float **d_clusters,
+		int **d_membership, long nvectors, int ndims, int nclusters)
+{
+
+	cudaError_t err = cudaMalloc(d_data, nvectors * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_data error %s\n", cudaGetErrorString(err));
+		return 1;
+	}
+
+	err = cudaMemcpy(*d_data, *h_data, nvectors * ndims * sizeof(float), cudaMemcpyHostToDevice);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
+		return 1;
+	}
+
+	// for (int i = 0; i < nclusters; i++)
+	// 	for (int j = 0; j < ndims; j++)
+	// 		//(*h_clusters)[i * ndims + j] = (*h_data)[i * ndims + j];
+	// 		printf("%f ",(*h_clusters)[i * ndims + j]);
+
+	err = cudaMalloc(d_clusters, nclusters * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_clusters error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
+
+	err = cudaMalloc(d_membership, nvectors * sizeof(int));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
+
+	return 0;
+}
+
 extern "C" int
 setup_data(float **h_data, float **d_data, float **h_clusters, float **d_clusters,
 		int **h_membership, int **d_membership, int **h_clusters_members,
@@ -210,9 +239,13 @@ setup_data(float **h_data, float **d_data, float **h_clusters, float **d_cluster
 		return 1;
 	}
 
-	for (int i = 0; i < nclusters; i++)
-		for (int j = 0; j < ndims; j++)
+	for (int i = 0; i < nclusters; i++){
+		for (int j = 0; j < ndims; j++){
 			(*h_clusters)[i * ndims + j] = (*h_data)[i * ndims + j];
+			//printf("%f ",(*h_clusters)[i * ndims + j]);
+		}
+		//printf("\n");
+	}
 
 	err = cudaMalloc(d_clusters, nclusters * ndims * sizeof(float));
 	if (err != cudaSuccess) {
