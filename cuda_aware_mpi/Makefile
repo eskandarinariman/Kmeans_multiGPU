@@ -7,19 +7,25 @@ NVCC=nvcc
 CC=gcc
 
 CCFLAGS =-Wall
-MPICCFLAGS=
+MPICCFLAGS=-Wall
 NVCCFLAGS=-arch sm_52
-NVLDFLAGS=-L${CUDA_HOME}/lib64 -lcudart
+MPICCLD=-L${CUDA_HOME}/lib64 -lcudart
 
-kmeans = mpi_kmeans_one_vector
-kmeans += mpi_kmeans_max_threads
-kmeans += mpi_kmeans_coalesce
+kmeans  = one_vector_cpu_sum
+#kmeans += one_vector_gpu_sum
+kmeans += max_threads_cpu_sum
+#kmeans += max_threads_gpu_sum
+kmeans += coalesce_cpu_sum
+#kmeans += coalesce_gpu_sum
 
 default: $(kmeans)
 
-mpi_kmeans_one_vector.o: DFLAGS=-DONE_VECTOR
-mpi_kmeans_max_threads.o: DFLAGS=-DMAX_THREADS
-mpi_kmeans_coalesce.o: DFLAGS=-DCOALESCE
+one_vector_cpu_sum.o: DFLAGS=-DONE_VECTOR -DCPU_SUM
+one_vector_gpu_sum.o: DFLAGS=-DONE_VECTOR -DGPU_SUM
+max_threads_cpu_sum.o: DFLAGS=-DMAX_THREADS -DCPU_SUM
+max_threads_gpu_sum.o: DFLAGS=-DMAX_THREADS -DGPU_SUM
+coalesce_cpu_sum.o: DFLAGS=-DCOALESCE -DCPU_SUM
+coalesce_gpu_sum.o: DFLAGS=-DCOALESCE -DGPU_SUM
 
 $(kmeans:=.o): kmeans.h kmeans.cu Makefile
 	$(NVCC) $(NVCCFLAGS) -c $(DFLAGS) kmeans.cu -o $@
@@ -27,17 +33,17 @@ $(kmeans:=.o): kmeans.h kmeans.cu Makefile
 util.o: kmeans.h util.c Makefile
 	$(CC) $(CCFLAGS) -c util.c
 
-mpi_hello_world.o: mpi_hello_world.c Makefile
-	$(MPICC) -c mpi_hello_world.c
+main.o: main.c Makefile
+	$(MPICC) $(MPICCFLAGS) -c main.c
 
-$(kmeans): %: %.o util.o mpi_hello_world.o Makefile
-	$(MPICC) -o $@ $@.o util.o mpi_hello_world.o $(NVLDFLAGS)
+$(kmeans): %: %.o util.o main.o Makefile
+	$(MPICC) $(MPICCFLAGS) -o $@ $@.o util.o main.o $(MPICCLD)
 
 clean:
-	rm -rf *.o $(kmeans)
+	rm -f *.o $(kmeans)
 
 # this is just a default/example run
 # export LD_LIBRARY_PATH for linking on other machines
 # -rf <file> specifies hosts and ranks/slots to run on
-run: mpi_kmeans_one_vector
-	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi mpi_kmeans_one_vector /tmp/data 3800000 256 2 1
+run: one_vector_cpu_sum
+	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi one_vector_cpu_sum /tmp/data 3800000 256 2 1

@@ -2,4 +2,5 @@
 *.log
 *_cpu
 *_gpu
+*_sum
 data_gen
