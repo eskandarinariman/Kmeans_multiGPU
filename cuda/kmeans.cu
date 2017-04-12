@@ -9,7 +9,7 @@ extern "C" {
 
 using namespace std;
 
- __inline__ __device__
+__inline__ __device__
 float warpReduceSum(float val)
 {
   for (int offset = warpSize/2; offset > 0; offset /= 2) 
@@ -275,7 +275,6 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		int *h_clusters_members, float *h_clusters_sums, long nvectors,
 		int ndims, int nclusters, int niters)
 {
-	//todo: make threadsPerBock and
 #ifdef ONE_VECTOR
 	int thread_vectors = 1;
 	int block_threads = 64;
@@ -292,10 +291,10 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 #endif
 #endif
 
-	struct timespec start, end;
-	clock_gettime(CLOCK_MONOTONIC, &start);
-
 	for (int i = 0; i < niters; i++) {
+		struct timespec start, end;
+		clock_gettime(CLOCK_MONOTONIC, &start);
+
 		cudaError_t err = cudaMemcpy(d_clusters, h_clusters, nclusters * ndims * sizeof(float),
 				cudaMemcpyHostToDevice);
 		if (err != cudaSuccess) {
@@ -337,9 +336,10 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		for (int i = 0; i < nclusters; i++)
 			for (int j = 0; j < ndims; j++)
 				h_clusters[i * ndims + j] = h_clusters_sums[i * ndims + j] / h_clusters_members[i];
-	}
 
-	clock_gettime(CLOCK_MONOTONIC, &end);
+		clock_gettime(CLOCK_MONOTONIC, &end);
+		printf("iter(%d) = %luns\n", i, time_diff(start, end));
+	}
 
 	for (int i = 0; i < nclusters; i++) {
 		printf("clusters[%d]:\n", i);
@@ -348,8 +348,6 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 			printf(", %f", h_clusters[i * ndims + j]);
 		printf("\n");
 	}
-
-	printf("runtime = %luns\n", time_diff(start, end));
 	return 0;
 }
 
@@ -464,22 +462,31 @@ main(int argc, char *argv[])
 	int  ndims     = atoi(argv[3]);
 	int  nclusters = atoi(argv[4]);
 	int  niters    = atoi(argv[5]);
-
+	struct timespec start, end;
 	float *h_data, *d_data, *h_clusters, *d_clusters, *h_clusters_sums;
 	int *h_membership, *d_membership, *h_clusters_members;
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
+
 	int err = setup_data(&h_data, &d_data, &h_clusters, &d_clusters,
 			&h_membership, &d_membership, &h_clusters_members,
 			&h_clusters_sums, nvectors, ndims, nclusters, infile);
 	if (err)
 		return err;
 
-	printf("setup complete running kmeans...\n");
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	printf("setup = %luns\n", time_diff(start, end));
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
 
 	err = run_kmeans(h_data, d_data, h_clusters, d_clusters, h_membership,
 			d_membership, h_clusters_members, h_clusters_sums, nvectors, ndims,
 			nclusters, niters);
 	if (err)
 		return err;
+
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	printf("runtime = %luns\n", time_diff(start, end));
 
 	free(h_data);
 	cudaFree(d_data);
