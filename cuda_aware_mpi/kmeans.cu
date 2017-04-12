@@ -203,11 +203,23 @@ host_setup_data(float **h_data, float **h_clusters, int **h_membership, int **h_
 		return 1;
 	}
 
+#ifdef REMOTE_DATA
+
+	if(world_rank == 0){
+
+		int errr = read_data(h_data, nvectors * ndims * sizeof(float), infile);
+		if (errr) {
+			fprintf(stderr, "read_data error: %d\n", errr);
+			return 1;
+		}
+	}
+#else
 	int errr = read_data(h_data, nvectors * ndims * sizeof(float), infile);
 	if (errr) {
 		fprintf(stderr, "read_data error: %d\n", errr);
 		return 1;
 	}
+#endif
 
 	*h_clusters = (float *)malloc(nclusters * ndims * sizeof(float));
 	if (*h_clusters == NULL) {
