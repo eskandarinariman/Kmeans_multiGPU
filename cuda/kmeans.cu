@@ -291,7 +291,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 #endif
 #endif
 
-	for (int i = 0; i < niters; i++) {
+	for (int iter = 0; iter < niters; iter++) {
 		struct timespec start, end;
 		clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -338,7 +338,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 				h_clusters[i * ndims + j] = h_clusters_sums[i * ndims + j] / h_clusters_members[i];
 
 		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("iter(%d) = %luns\n", i, time_diff(start, end));
+		printf("iter(%d) = %luns\n", iter, time_diff(start, end));
 	}
 
 	for (int i = 0; i < nclusters; i++) {
