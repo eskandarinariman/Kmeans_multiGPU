@@ -138,7 +138,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 
 	clock_gettime(CLOCK_MONOTONIC, &end);
 
-	// printf("runtime = %luns\n", time_diff(start, end));
+	printf("runtime = %luns\n", time_diff(start, end));
 	return 0;
 }
 

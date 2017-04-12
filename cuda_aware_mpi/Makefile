@@ -40,4 +40,4 @@ clean:
 # export LD_LIBRARY_PATH for linking on other machines
 # -rf <file> specifies hosts and ranks/slots to run on
 run: mpi_kmeans_one_vector
-	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi mpi_kmeans_one_vector /tmp/data 3800000 256 2 1
+	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi mpi_kmeans_one_vector /tmp/data 10240 256 1024 15

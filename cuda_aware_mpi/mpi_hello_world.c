@@ -184,7 +184,7 @@ host_setup_data(float **h_data, float **h_clusters,
   for(itr = 0 ; itr < niters ;itr++){    
     MPI_Bcast(h_clusters, nclusters *ndims, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-    printf("setup complete running kmeans...\n");
+    //printf("setup complete running kmeans...\n");
 
 
 // for (i = 0; i < nclusters; i++)
