@@ -45,5 +45,5 @@ clean:
 # this is just a default/example run
 # export LD_LIBRARY_PATH for linking on other machines
 # -rf <file> specifies hosts and ranks/slots to run on
-run: mpi_kmeans_one_vector
-	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi mpi_kmeans_one_vector /tmp/data 10240 256 1024 15
+run: one_vector_cpu_sum
+	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi one_vector_cpu_sum /tmp/data 10240 256 1024 15

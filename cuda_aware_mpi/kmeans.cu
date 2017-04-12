@@ -145,12 +145,9 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 	cpu_sum_clusters(h_data, h_membership, h_clusters_members,
 			h_clusters_sums, nvectors, ndims, nclusters);
 #elif GPU_SUM
-	TODO
+	// TODO
 #endif
 
-
-	printf("runtime = %luns\n", time_diff(start, end));
-	
 	return 0;
 }
 
