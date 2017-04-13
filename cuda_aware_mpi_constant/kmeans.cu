@@ -59,10 +59,19 @@ __global__ void
 kmeans_coalesce(const float *data, const float *clusters, int *membership,
 		int ndims, int nclusters, int nvectors, int threads)
 {
+
+	__shared__ float s_cluster[16384];
+
+	for (int i = 0; i < nclusters; i++) {
+		for (int j = 0; j < ndims; j++) {
+			s_cluster[i*ndims+j] = clusters[i*ndims+j];
+		}
+	}
+
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
 	for (int vector = tid; vector < nvectors; vector+=threads) {
 		if (vector < nvectors)
-			vector_dist(vector, data, clusters, membership, ndims, nclusters);
+			vector_dist(vector, data, s_cluster, membership, ndims, nclusters);
 	}
 }
 
@@ -112,6 +121,8 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 	int thread_vectors = (nvectors + (threads - 1))/threads;
 #endif
 #endif
+
+	//cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
 
 	cudaError_t err = cudaMemcpyToSymbol (clusters, h_clusters, nclusters * ndims * sizeof(float));
 	if (err != cudaSuccess) {
