@@ -35,7 +35,7 @@ main(int argc, char** argv)
 	int  nclusters = atoi(argv[4]);
 	int  niters    = atoi(argv[5]);
 
-	float *h_data, *d_data, *h_clusters, *d_clusters, *h_clusters_local_sums, *h_clusters_global_sums;
+	float *h_data, *d_data, *h_clusters, *h_clusters_local_sums, *h_clusters_global_sums;
 	int *h_membership, *d_membership, *h_clusters_local_members,*h_clusters_global_members;
 
 	struct timespec start, end;
@@ -92,7 +92,7 @@ main(int argc, char** argv)
 
 //***********************************************************************************
 
-	err = device_setup_data(&h_data, &d_data, &d_clusters,
+	err = device_setup_data(&h_data, &d_data,
 			&d_membership, nvectors, ndims, nclusters);
 	if (err)
 		return err;
@@ -109,7 +109,7 @@ main(int argc, char** argv)
 
 		MPI_Bcast(h_clusters, nclusters *ndims, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-		err = run_kmeans(h_data, d_data, h_clusters, d_clusters, h_membership, d_membership,
+		err = run_kmeans(h_data, d_data, h_clusters, h_membership, d_membership,
 				h_clusters_local_members, h_clusters_local_sums, nvectors, ndims, nclusters, niters);
 		if (err)
 			return err;

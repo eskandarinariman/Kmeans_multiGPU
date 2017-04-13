@@ -5,6 +5,8 @@ extern "C" {
 #include "kmeans.h"
 }
 
+__constant__ float clusters[16384];
+
 /*
  * data       [nvectors  * ndims]
  * clusters   [nclusters * ndims]
@@ -57,10 +59,19 @@ __global__ void
 kmeans_coalesce(const float *data, const float *clusters, int *membership,
 		int ndims, int nclusters, int nvectors, int threads)
 {
+
+	__shared__ float s_cluster[16384];
+
+	for (int i = 0; i < nclusters; i++) {
+		for (int j = 0; j < ndims; j++) {
+			s_cluster[i*ndims+j] = clusters[i*ndims+j];
+		}
+	}
+
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
 	for (int vector = tid; vector < nvectors; vector+=threads) {
 		if (vector < nvectors)
-			vector_dist(vector, data, clusters, membership, ndims, nclusters);
+			vector_dist(vector, data, s_cluster, membership, ndims, nclusters);
 	}
 }
 
@@ -91,7 +102,7 @@ cpu_sum_clusters(const float *data, const int *membership, int *clusters_members
  */
 int
 run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
-		float *d_clusters, int *h_membership, int *d_membership,
+		int *h_membership, int *d_membership,
 		int *h_clusters_members, float *h_clusters_sums, long nvectors,
 		int ndims, int nclusters, int niters)
 {
@@ -111,12 +122,15 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 #endif
 #endif
 
-	cudaError_t err = cudaMemcpy(d_clusters, h_clusters, nclusters * ndims * sizeof(float),
-			cudaMemcpyHostToDevice);
+	//cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
+
+	cudaError_t err = cudaMemcpyToSymbol (clusters, h_clusters, nclusters * ndims * sizeof(float));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamemcpy d_clusters error %s\n", cudaGetErrorString(err));
 		return -1;
 	}
+	float * d_clusters;
+	cudaGetSymbolAddress((void **)&d_clusters, clusters);
 
 #ifdef ONE_VECTOR
 	kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
@@ -159,7 +173,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
  * h_clusters_sums    [nclusters * ndims]
  */
 int
-device_setup_data(float **h_data, float **d_data, float **d_clusters,
+device_setup_data(float **h_data, float **d_data,
 		int **d_membership, long nvectors, int ndims, int nclusters)
 {
 
@@ -173,12 +187,6 @@ device_setup_data(float **h_data, float **d_data, float **d_clusters,
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamemcpy d_data error %s\n", cudaGetErrorString(err));
 		return 1;
-	}
-
-	err = cudaMalloc(d_clusters, nclusters * ndims * sizeof(float));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "cudamalloc d_clusters error %s\n", cudaGetErrorString(err));
-		return -1;
 	}
 
 	err = cudaMalloc(d_membership, nvectors * sizeof(int));
