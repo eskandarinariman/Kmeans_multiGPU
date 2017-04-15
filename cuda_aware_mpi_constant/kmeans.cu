@@ -60,18 +60,18 @@ kmeans_coalesce(const float *data, const float *clusters, int *membership,
 		int ndims, int nclusters, int nvectors, int threads)
 {
 
-	__shared__ float s_cluster[16384];
+	// __shared__ float s_cluster[8192];
 
-	for (int i = 0; i < nclusters; i++) {
-		for (int j = 0; j < ndims; j++) {
-			s_cluster[i*ndims+j] = clusters[i*ndims+j];
-		}
-	}
+	// for (int i = 0; i < nclusters; i++) {
+	// 	for (int j = 0; j < ndims; j++) {
+	// 		s_cluster[i*ndims+j] = clusters[i*ndims+j];
+	// 	}
+	// }
 
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
 	for (int vector = tid; vector < nvectors; vector+=threads) {
 		if (vector < nvectors)
-			vector_dist(vector, data, s_cluster, membership, ndims, nclusters);
+			vector_dist(vector, data, clusters, membership, ndims, nclusters);
 	}
 }
 
