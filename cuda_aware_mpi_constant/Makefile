@@ -60,4 +60,4 @@ clean:
 # export LD_LIBRARY_PATH for linking on other machines
 # -rf <file> specifies hosts and ranks/slots to run on
 run: one_vector_cpu_sum
-	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi one_vector_cpu_sum /tmp/data 10240 256 1024 15
+	${MPI_HOME}/bin/mpiexec -x LD_LIBRARY_PATH -rf ug.mpi one_vector_cpu_sum /tmp/data 10240 256 32 50
