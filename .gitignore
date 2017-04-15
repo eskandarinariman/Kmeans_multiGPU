@@ -3,4 +3,6 @@
 *_cpu
 *_gpu
 *_sum
+*_nopin
+*_pin
 data_gen
