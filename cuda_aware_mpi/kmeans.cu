@@ -5,14 +5,17 @@ extern "C" {
 #include "kmeans.h"
 }
 
+#define D_THREADS 2048
+
+#ifdef CPU_SUM
 /*
  * data       [nvectors  * ndims]
  * clusters   [nclusters * ndims]
  * membership [nvectors]
  */
-__device__ inline void
-vector_dist(unsigned int vector, const float *data, const float *clusters,
-		int *membership, int ndims, int nclusters)
+__inline__ __device__ void
+vector_dist(unsigned int vector, const float* data, const float* clusters,
+		int* membership, int ndims, int nclusters)
 {
 	int index = -1;
 	float min_dist = FLT_MAX;
@@ -55,14 +58,80 @@ kmeans_max_threads(const float *data, const float *clusters, int *membership,
 
 __global__ void
 kmeans_coalesce(const float *data, const float *clusters, int *membership,
-		int ndims, int nclusters, int nvectors, int threads)
+		int ndims, int nclusters, int nvectors)
 {
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
-	for (int vector = tid; vector < nvectors; vector+=threads) {
+	for (int vector = tid; vector < nvectors; vector += D_THREADS) {
 		if (vector < nvectors)
 			vector_dist(vector, data, clusters, membership, ndims, nclusters);
 	}
 }
+#elif GPU_SUM
+/*
+ * data       [nvectors  * ndims]
+ * clusters   [nclusters * ndims]
+ * clusters_sums [nclusters * ndims]
+ * clusters_members [nclusters]
+ */
+__inline__ __device__ void
+vector_dist(unsigned int vector, const float* data, const float* clusters,
+		float *clusters_sums, int *clusters_members, int ndims, int nclusters)
+{
+	int index = -1;
+	float min_dist = FLT_MAX;
+
+	for (int i = 0; i < nclusters; i++) {
+		float dist = 0.0;
+
+		for (int j = 0; j < ndims; j++) {
+			float diff = data[vector * ndims + j] - clusters[i * ndims + j];
+			dist += diff * diff;
+		}
+
+		if (dist < min_dist) {
+			min_dist = dist;
+			index    = i;
+		}
+	}
+
+	atomicAdd(&clusters_members[index], 1);
+	for (int j = 0; j < ndims; j++) {
+		float val = data[vector * ndims + j] ;
+		atomicAdd(&clusters_sums[index * ndims + j], val);
+	}
+}
+
+__global__ void
+kmeans_one_vector(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters)
+{
+	unsigned int vector = blockIdx.x * blockDim.x + threadIdx.x;
+	vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+}
+
+__global__ void
+kmeans_max_threads(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters, int nvectors, int thread_vectors)
+{
+	unsigned int start = (blockIdx.x * blockDim.x + threadIdx.x) * thread_vectors;
+	unsigned int end   = start + thread_vectors;
+	for (int vector = start; vector < end; vector++) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+	}
+}
+
+__global__ void
+kmeans_coalesce(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters, int nvectors)
+{
+	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int vector = tid; vector < nvectors; vector += D_THREADS) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+	}
+}
+#endif
 
 /*
  * data               [nvectors  * ndims]
@@ -90,10 +159,9 @@ cpu_sum_clusters(const float *data, const int *membership, int *clusters_members
  * h_clusters_sums    [nclusters * ndims]
  */
 int
-run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
-		float *d_clusters, int *h_membership, int *d_membership,
-		int *h_clusters_members, float *h_clusters_sums, long nvectors,
-		int ndims, int nclusters, int niters)
+run_kmeans(const float *h_data, const float *d_data, float *h_clusters, float *d_clusters,
+		int *h_membership, int *d_membership, int *h_clusters_members, int *d_clusters_members,
+		float *h_clusters_sums, float *d_clusters_sums, long nvectors, int ndims, int nclusters, int niters)
 {
 #ifdef ONE_VECTOR
 	int thread_vectors = 1;
@@ -102,12 +170,11 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 	assert((nvectors / thread_vectors) % block_threads == 0);
 	int grid_blocks = (nvectors / thread_vectors) / block_threads;
 #elif MAX_THREADS || COALESCE
-	int grid_blocks = 128;
-	int block_threads = 16;
-	int threads = grid_blocks * block_threads;
-	assert(threads == 2048);
+	int grid_blocks = 16;
+	int block_threads = 128;
+	assert(grid_blocks * block_threads == D_THREADS);
 #if MAX_THREADS
-	int thread_vectors = (nvectors + (threads - 1))/threads;
+	int thread_vectors = (nvectors + (D_THREADS - 1)) / D_THREADS;
 #endif
 #endif
 
@@ -118,6 +185,7 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		return -1;
 	}
 
+#if CPU_SUM
 #ifdef ONE_VECTOR
 	kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
 			d_membership, ndims, nclusters);
@@ -126,8 +194,8 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 			d_membership, ndims, nclusters, nvectors, thread_vectors);
 #elif COALESCE
 	kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
-			d_membership, ndims, nclusters, nvectors, threads);
-#endif
+			d_membership, ndims, nclusters, nvectors);
+#endif /* membership type */
 	err = cudaGetLastError();
 	if (err != cudaSuccess) {
 		fprintf(stderr, "kmeans_kernel error %s\n", cudaGetErrorString(err));
@@ -141,13 +209,35 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 		return -1;
 	}
 
-#ifdef CPU_SUM
 	cpu_sum_clusters(h_data, h_membership, h_clusters_members,
 			h_clusters_sums, nvectors, ndims, nclusters);
-#elif GPU_SUM
-	// TODO
-#endif
 
+#elif GPU_SUM
+#if ONE_VECTOR
+			kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters);
+#elif MAX_THREADS
+			kmeans_max_threads<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors, thread_vectors);
+#elif COALESCE
+			kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors);
+#endif /* membership type */
+
+			err = cudaMemcpy(h_clusters_sums, d_clusters_sums,
+					nclusters * ndims * sizeof(float), cudaMemcpyDeviceToHost);
+			if (err != cudaSuccess) {
+				fprintf(stderr, "cudamemcpy h_clusters_sums error %s\n", cudaGetErrorString(err));
+				exit(2);
+			}	
+
+			err = cudaMemcpy(h_clusters_members, d_clusters_members,
+					nclusters * sizeof(int), cudaMemcpyDeviceToHost);
+			if (err != cudaSuccess) {
+				fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(err));
+				exit(2);
+			}
+#endif /* sum type */
 	return 0;
 }
 
@@ -160,7 +250,8 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
  */
 int
 device_setup_data(float **h_data, float **d_data, float **d_clusters,
-		int **d_membership, long nvectors, int ndims, int nclusters)
+		int **d_membership, int **d_clusters_local_members, float **d_clusters_local_sums,
+		long nvectors, int ndims, int nclusters)
 {
 
 	cudaError_t err = cudaMalloc(d_data, nvectors * ndims * sizeof(float));
@@ -184,6 +275,17 @@ device_setup_data(float **h_data, float **d_data, float **d_clusters,
 	err = cudaMalloc(d_membership, nvectors * sizeof(int));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
+
+	err = cudaMalloc(d_clusters_local_members, nclusters * sizeof(int));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_clusters_local_members error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
+	err = cudaMalloc(d_clusters_local_sums, nclusters * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamalloc d_clusters_local_sums error %s\n", cudaGetErrorString(err));
 		return -1;
 	}
 

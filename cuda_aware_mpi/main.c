@@ -35,8 +35,10 @@ main(int argc, char** argv)
 	int  nclusters = atoi(argv[4]);
 	int  niters    = atoi(argv[5]);
 
-	float *h_data, *d_data, *h_clusters, *d_clusters, *h_clusters_local_sums, *h_clusters_global_sums;
-	int *h_membership, *d_membership, *h_clusters_local_members,*h_clusters_global_members;
+	float *h_data, *d_data, *h_clusters, *d_clusters, *h_clusters_local_sums,
+		  *d_clusters_local_sums, *h_clusters_global_sums;
+	int *h_membership, *d_membership, *h_clusters_local_members, *d_clusters_local_members,
+		*h_clusters_global_members;
 
 	struct timespec start, end;
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -59,7 +61,6 @@ main(int argc, char** argv)
 		return err;
 
 #ifdef REMOTE_DATA
-	printf("remote data: %d\n", REMOTE_DATA);
 	if(world_rank == 0){
 		for(i = 1; i < world_size ;i++){
 			int error_code = MPI_Send(h_data,nvectors * ndims , MPI_FLOAT,i,i,MPI_COMM_WORLD);
@@ -93,12 +94,10 @@ main(int argc, char** argv)
 
 //***********************************************************************************
 
-	err = device_setup_data(&h_data, &d_data, &d_clusters,
-			&d_membership, nvectors, ndims, nclusters);
+	err = device_setup_data(&h_data, &d_data, &d_clusters, &d_membership,
+			&d_clusters_local_members, &d_clusters_local_sums, nvectors, ndims, nclusters);
 	if (err)
 		return err;
-
-	printf("setup complete running kmeans...\n");
 
 	// Initialize the MPI environment. The two arguments to MPI Init are not
 	// currently used by MPI implementations, but are there in case future
@@ -111,7 +110,8 @@ main(int argc, char** argv)
 		MPI_Bcast(h_clusters, nclusters *ndims, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
 		err = run_kmeans(h_data, d_data, h_clusters, d_clusters, h_membership, d_membership,
-				h_clusters_local_members, h_clusters_local_sums, nvectors, ndims, nclusters, niters);
+				h_clusters_local_members, d_clusters_local_members, h_clusters_local_sums,
+				d_clusters_local_sums, nvectors, ndims, nclusters, niters);
 		if (err)
 			return err;
 
@@ -127,7 +127,7 @@ main(int argc, char** argv)
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &iter_end);
-		printf("iter(%d) = %luns\n", iter, time_diff(iter_start, iter_end));
+		printf("[%d] iter(%d) = %luns\n", world_rank, iter, time_diff(iter_start, iter_end));
 	}
 
 	// if(world_rank == 0) {
@@ -141,7 +141,9 @@ main(int argc, char** argv)
 	// }
 
 	clock_gettime(CLOCK_MONOTONIC, &end);
-	printf("total runtime = %luns\n", time_diff(start, end));
+	if (world_rank == 0) {
+		printf("runtime = %luns\n", time_diff(start, end));
+	}
 
 	MPI_Finalize();
 	return 0;
@@ -149,9 +151,9 @@ main(int argc, char** argv)
 
 char* new_filename(char * infile,int i){
 	size_t len = strlen(infile);
-	char *str2 = malloc(len + 1 + 1 );
+	char *str2 = malloc(len + 1);
 	strcpy(str2, infile);
-    str2[len] = i + '0';
-    str2[len + 1] = '\0';
+    str2[len - 1] = i + '0';
+    str2[len] = '\0';
     return str2;
 }

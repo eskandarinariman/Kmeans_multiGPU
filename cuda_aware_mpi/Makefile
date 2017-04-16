@@ -12,18 +12,11 @@ NVCCFLAGS=-arch sm_52
 MPICCLD=-L${CUDA_HOME}/lib64 -lcudart
 
 kmeans  = one_vector_cpu_sum
-#kmeans += one_vector_gpu_sum
+kmeans += one_vector_gpu_sum
 kmeans += max_threads_cpu_sum
-#kmeans += max_threads_gpu_sum
+kmeans += max_threads_gpu_sum
 kmeans += coalesce_cpu_sum
-#kmeans += coalesce_gpu_sum
-
-#kmeans  += one_vector_cpu_sum_remote
-#kmeans += one_vector_gpu_sum_remote
-#kmeans += max_threads_cpu_sum_remote
-#kmeans += max_threads_gpu_sum_remote
-#kmeans += coalesce_cpu_sum_remote
-#kmeans += coalesce_gpu_sum_remote
+kmeans += coalesce_gpu_sum
 
 default: $(kmeans) $(kmeans:=_remote)
 
@@ -63,7 +56,7 @@ $(kmeans:=_remote): %: %.o util.o main_remote.o Makefile
 	$(MPICC) $(MPICCFLAGS) -o $@ $@.o util.o main.o $(MPICCLD)
 
 clean:
-	rm -f *.o $(kmeans)
+	rm -f *.o $(kmeans) $(kmeans:=_remote)
 
 # this is just a default/example run
 # export LD_LIBRARY_PATH for linking on other machines
