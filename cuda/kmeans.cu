@@ -369,11 +369,11 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters, float *d
 {
 #if ONE_VECTOR
 	int thread_vectors = 1;
-	int block_threads = 76; // TODO: ... does this matter?
+	int block_threads = 125; // 125 as close to 128 as possible
 	assert(nvectors % thread_vectors == 0);
 	assert((nvectors / thread_vectors) % block_threads == 0);
 	int grid_blocks = (nvectors / thread_vectors) / block_threads;
-#elif (defined MAX_THREADS) || (defined COALESCE)
+#elif MAX_THREADS || COALESCE
 	int grid_blocks = 16;
 	int block_threads = 128;
 	assert(grid_blocks * block_threads == D_THREADS);
@@ -383,12 +383,10 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters, float *d
 		struct timespec start, end;
 		clock_gettime(CLOCK_MONOTONIC, &start);
 
-#if GPU_SUM
-		int thread_init= (ndims*nclusters)/256;
-		initKernel_float<<<256,thread_init >>>(d_clusters_sums,0, nclusters*ndims * sizeof(float));
-		thread_init= (nclusters)/2;
-		initKernel_int<<<2,thread_init >>>(d_clusters_members,0, nclusters * sizeof(int));
-#endif
+		/*int thread_init= (ndims*nclusters)/256;*/
+		/*initKernel_float<<<256,thread_init >>>(d_clusters_sums,0, nclusters*ndims * sizeof(float));*/
+		/*thread_init= (nclusters)/2;*/
+		/*initKernel_int<<<2,thread_init >>>(d_clusters_members,0, nclusters * sizeof(int));*/
 
 		cudaError_t err = cudaMemcpy(d_clusters, h_clusters, nclusters * ndims * sizeof(float),
 				cudaMemcpyHostToDevice);
@@ -549,9 +547,15 @@ setup_data(float **h_data, float **d_data, float **h_clusters, float **d_cluster
 		fprintf(stderr, "malloc h_membership failed\n");
 		return -1;
 	}
+	memset(*h_membership, 0, nvectors * sizeof(int)); 
 	err = cudaMalloc(d_membership, nvectors * sizeof(int));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
+		exit(2);
+	}
+	err = cudaMemset(*d_membership, 0, nvectors * sizeof(int));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemset d_membership error %s\n", cudaGetErrorString(err));
 		exit(2);
 	}
 #elif GPU_SUM
@@ -560,9 +564,19 @@ setup_data(float **h_data, float **d_data, float **h_clusters, float **d_cluster
 		fprintf(stderr, "cudamalloc d_clusters_members error %s\n", cudaGetErrorString(err));
 		exit(2);
 	}
+	err = cudaMemset(*d_clusters_members, 0, nclusters * sizeof(int));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemset d_clusters_members error %s\n", cudaGetErrorString(err));
+		exit(2);
+	}
 	err = cudaMalloc(d_clusters_sums, nclusters * ndims * sizeof(float));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_clusters_sums error %s\n", cudaGetErrorString(err));
+		exit(2);
+	}
+	err = cudaMemset(*d_clusters_sums, 0, nclusters * ndims * sizeof(float));
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemset d_clusters_sums error %s\n", cudaGetErrorString(err));
 		exit(2);
 	}
 #endif
@@ -572,12 +586,14 @@ setup_data(float **h_data, float **d_data, float **h_clusters, float **d_cluster
 		fprintf(stderr, "malloc h_clusters_members failed\n");
 		return -1;
 	}
+	memset(*h_clusters_members, 0, nclusters * sizeof(int)); 
 
 	*h_clusters_sums = (float *)malloc(nclusters * ndims * sizeof(float));
 	if (*h_clusters_sums == NULL) {
 		fprintf(stderr, "malloc h_clusters_sums failed\n");
 		return -1;
 	}
+	memset(*h_clusters_sums, 0, nclusters * ndims * sizeof(float)); 
 
 	return 0;
 }
