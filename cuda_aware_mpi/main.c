@@ -59,6 +59,7 @@ main(int argc, char** argv)
 		return err;
 
 #ifdef REMOTE_DATA
+	printf("remote data: %d\n", REMOTE_DATA);
 	if(world_rank == 0){
 		for(i = 1; i < world_size ;i++){
 			int error_code = MPI_Send(h_data,nvectors * ndims , MPI_FLOAT,i,i,MPI_COMM_WORLD);
