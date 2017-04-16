@@ -382,6 +382,11 @@ kmeans_stream(void *vargs)
 				fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(cerr));
 				exit(2);
 			}
+			cerr = cudaStreamSynchronize(0);
+			if (cerr != cudaSuccess) {
+				fprintf(stderr, "cudastreamsync error %s\n", cudaGetErrorString(cerr));
+				exit(2);
+			}
 #endif /* sum type */
 
 			/*clock_gettime(CLOCK_MONOTONIC, &end);*/

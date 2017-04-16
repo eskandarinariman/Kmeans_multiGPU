@@ -214,29 +214,35 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters, float *d
 
 #elif GPU_SUM
 #if ONE_VECTOR
-			kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
-					d_clusters_sums, d_clusters_members, ndims, nclusters);
+	kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+			d_clusters_sums, d_clusters_members, ndims, nclusters);
 #elif MAX_THREADS
-			kmeans_max_threads<<<grid_blocks, block_threads>>>(d_data, d_clusters,
-					d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors, thread_vectors);
+	kmeans_max_threads<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+			d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors, thread_vectors);
 #elif COALESCE
-			kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
-					d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors);
+	kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+			d_clusters_sums, d_clusters_members, ndims, nclusters, nvectors);
 #endif /* membership type */
+	err = cudaGetLastError();
+	if (err != cudaSuccess) {
+		fprintf(stderr, "kmeans_kernel error %s\n", cudaGetErrorString(err));
+		return -1;
+	}
+	cudaDeviceSynchronize();
 
-			err = cudaMemcpy(h_clusters_sums, d_clusters_sums,
-					nclusters * ndims * sizeof(float), cudaMemcpyDeviceToHost);
-			if (err != cudaSuccess) {
-				fprintf(stderr, "cudamemcpy h_clusters_sums error %s\n", cudaGetErrorString(err));
-				exit(2);
-			}	
+	err = cudaMemcpy(h_clusters_sums, d_clusters_sums,
+			nclusters * ndims * sizeof(float), cudaMemcpyDeviceToHost);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy h_clusters_sums error %s\n", cudaGetErrorString(err));
+		exit(2);
+	}	
 
-			err = cudaMemcpy(h_clusters_members, d_clusters_members,
-					nclusters * sizeof(int), cudaMemcpyDeviceToHost);
-			if (err != cudaSuccess) {
-				fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(err));
-				exit(2);
-			}
+	err = cudaMemcpy(h_clusters_members, d_clusters_members,
+			nclusters * sizeof(int), cudaMemcpyDeviceToHost);
+	if (err != cudaSuccess) {
+		fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(err));
+		exit(2);
+	}
 #endif /* sum type */
 	return 0;
 }
