@@ -546,7 +546,6 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 	int grid_blocks = 16;
 	int block_threads = 128;
 	assert(grid_blocks * block_threads == D_THREADS);
-#elif COMBO
 #endif
 
 	err = pthread_barrier_init(&barrier, NULL, nstreams);
