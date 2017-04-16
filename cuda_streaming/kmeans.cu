@@ -11,6 +11,7 @@ extern "C" {
 #define D_THREADS 2048
 pthread_barrier_t barrier;
 
+#ifdef CPU_SUM
 /*
  * data       [nvectors  * ndims]
  * clusters   [nclusters * ndims]
@@ -69,6 +70,72 @@ kmeans_coalesce(const float *data, const float *clusters, int *membership,
 			vector_dist(vector, data, clusters, membership, ndims, nclusters);
 	}
 }
+#elif GPU_SUM
+/*
+ * data       [nvectors  * ndims]
+ * clusters   [nclusters * ndims]
+ * clusters_sums [nclusters * ndims]
+ * clusters_members [nclusters]
+ */
+__inline__ __device__ void
+vector_dist(unsigned int vector, const float* data, const float* clusters,
+		float *clusters_sums, int *clusters_members, int ndims, int nclusters)
+{
+	int index = -1;
+	float min_dist = FLT_MAX;
+
+	for (int i = 0; i < nclusters; i++) {
+		float dist = 0.0;
+
+		for (int j = 0; j < ndims; j++) {
+			float diff = data[vector * ndims + j] - clusters[i * ndims + j];
+			dist += diff * diff;
+		}
+
+		if (dist < min_dist) {
+			min_dist = dist;
+			index    = i;
+		}
+	}
+
+	atomicAdd(&clusters_members[index], 1);
+	for (int j = 0; j < ndims; j++) {
+		float val = data[vector * ndims + j] ;
+		atomicAdd(&clusters_sums[index * ndims + j], val);
+	}
+}
+
+__global__ void
+kmeans_one_vector(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters)
+{
+	unsigned int vector = blockIdx.x * blockDim.x + threadIdx.x;
+	vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+}
+
+__global__ void
+kmeans_max_threads(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters, int nvectors, int thread_vectors)
+{
+	unsigned int start = (blockIdx.x * blockDim.x + threadIdx.x) * thread_vectors;
+	unsigned int end   = start + thread_vectors;
+	for (int vector = start; vector < end; vector++) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+	}
+}
+
+__global__ void
+kmeans_coalesce(const float *data, const float *clusters, float *clusters_sums,
+		int *clusters_members, int ndims, int nclusters, int nvectors)
+{
+	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int vector = tid; vector < nvectors; vector += D_THREADS) {
+		if (vector < nvectors)
+			vector_dist(vector, data, clusters, clusters_sums, clusters_members, ndims, nclusters);
+	}
+}
+#endif
 
 void
 print_clusters(float *h_clusters, int ndims, int nclusters)
@@ -112,16 +179,14 @@ struct ks_args {
 	int    streamid;
 };
 
-
-// TODO: restrict clusters??
 void *
 kmeans_stream(void *vargs)
 {
 	struct ks_args *args = (struct ks_args *)vargs;
 	int err;
 	cudaError_t cerr;
-	struct timespec start, end;
-	clock_gettime(CLOCK_MONOTONIC, &start);
+	/*struct timespec start, end;*/
+	/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 	float  *h_clusters           = args->h_clusters;
 	float  *d_clusters           = args->d_clusters;
 	float  **h_clusters_sums     = args->h_clusters_sums;
@@ -142,8 +207,13 @@ kmeans_stream(void *vargs)
 	char   **infiles             = args->infiles;
 	int    nfiles                = args->nfiles;
 	int    streamid              = args->streamid;
-	float *h_data, *d_data, *d_clusters_sums;
-	int *h_membership, *d_membership, *d_clusters_members;
+	float *h_data, *d_data;
+#if CPU_SUM
+	int *h_membership, *d_membership;
+#elif GPU_SUM
+	float *d_clusters_sums;
+	int	  *d_clusters_members;
+#endif
 	int start_cluster;
 
 	start_cluster = streamid * stream_nclusters;
@@ -154,11 +224,13 @@ kmeans_stream(void *vargs)
 		fprintf(stderr, "cudamallochost h_data error %s\n", cudaGetErrorString(cerr));
 		exit(1);
 	}
+#if CPU_SUM
 	cerr = cudaMallocHost(&h_membership, membership_size);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudamallochost h_membership error %s\n", cudaGetErrorString(cerr));
 		exit(1);
 	}
+#endif
 	cerr = cudaMallocHost(&h_clusters_members[streamid], clusters_members_size);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudamallochost h_clusters_members[%d] error %s\n",
@@ -177,11 +249,13 @@ kmeans_stream(void *vargs)
 		fprintf(stderr, "malloc h_data failed\n");
 		exit(1);
 	}
+#if CPU_SUM
 	h_membership = (int *)malloc(membership_size);
 	if (h_membership == NULL) {
 		fprintf(stderr, "malloc h_membership failed\n");
 		exit(1);
 	}
+#endif
 	h_clusters_members[streamid] = (int *)malloc(clusters_members_size);
 	if (h_clusters_members[streamid] == NULL) {
 		fprintf(stderr, "malloc h_clusters_members[%d] failed\n", streamid);
@@ -198,24 +272,27 @@ kmeans_stream(void *vargs)
 		fprintf(stderr, "cudamalloc d_data error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
+#if CPU_SUM
 	cerr = cudaMalloc(&d_membership, membership_size);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
-	cerr = cudaMalloc(&d_clusters_members, membership_size);
+#elif GPU_SUM
+	cerr = cudaMalloc(&d_clusters_members, clusters_members_size);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_clusters_members error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
-	cerr = cudaMalloc(&d_clusters_sums, membership_size);
+	cerr = cudaMalloc(&d_clusters_sums, clusters_sums_size);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_clusters_sums error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
+#endif
 
-	clock_gettime(CLOCK_MONOTONIC, &end);
-	printf("[s%d] init = %luns\n", streamid, time_diff(start, end));
+	/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+	/*printf("[s%d] init = %luns\n", streamid, time_diff(start, end));*/
 
 	for (int iter = 0; iter < niters; iter++) {
 		struct timespec iter_start, iter_end;
@@ -227,15 +304,15 @@ kmeans_stream(void *vargs)
 		 */
 		for (int fileno = 0; fileno < nfiles; fileno++) {
 
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 			err = read_data(h_data, streamid * data_size, data_size, infiles[fileno]);
 			if (err)
 				exit(1);
 
-			clock_gettime(CLOCK_MONOTONIC, &end);
-			printf("[s%d] read_data = %luns\n", streamid, time_diff(start, end));
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+			/*printf("[s%d] read_data = %luns\n", streamid, time_diff(start, end));*/
+			/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 			cerr = cudaMemcpyAsync(d_data, h_data, data_size, cudaMemcpyHostToDevice);
 			if (cerr != cudaSuccess) {
@@ -244,7 +321,7 @@ kmeans_stream(void *vargs)
 			}
 
 			/* launch kernel for membership */
-#if ONE_VECTOR || MAX_THREADS || COALESCE
+#if CPU_SUM
 #if ONE_VECTOR
 			kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
 					d_membership, ndims, nclusters);
@@ -268,12 +345,11 @@ kmeans_stream(void *vargs)
 				exit(2);
 			}
 
-			clock_gettime(CLOCK_MONOTONIC, &end);
-			printf("[s%d] member sync = %luns\n", streamid, time_diff(start, end));
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+			/*printf("[s%d] member sync = %luns\n", streamid, time_diff(start, end));*/
+			/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 			/* calculate sum and count for each cluster */
-#if CPU_SUM
 			for (int i = 0; i < stream_nvectors; i++) {
 				int cluster = h_membership[i];
 				h_clusters_members[streamid][cluster]++;
@@ -281,39 +357,37 @@ kmeans_stream(void *vargs)
 					h_clusters_sums[streamid][cluster * ndims + j] += h_data[i * ndims + j];
 			}
 #elif GPU_SUM
+#if ONE_VECTOR
+			kmeans_one_vector<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters);
+#elif MAX_THREADS
+			int thread_vectors = (stream_nvectors + (D_THREADS - 1)) / D_THREADS;
+			kmeans_max_threads<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters, stream_nvectors, thread_vectors);
+#elif COALESCE
+			kmeans_coalesce<<<grid_blocks, block_threads>>>(d_data, d_clusters,
+					d_clusters_sums, d_clusters_members, ndims, nclusters, stream_nvectors);
+#endif /* membership type */
+
+			cerr = cudaMemcpyAsync(h_clusters_sums[streamid], d_clusters_sums,
+					clusters_sums_size, cudaMemcpyDeviceToHost);
+			if (cerr != cudaSuccess) {
+				fprintf(stderr, "cudamemcpy h_clusters_sums error %s\n", cudaGetErrorString(cerr));
+				exit(2);
+			}	
+
+			cerr = cudaMemcpyAsync(h_clusters_members[streamid], d_clusters_members,
+					clusters_members_size, cudaMemcpyDeviceToHost);
+			if (cerr != cudaSuccess) {
+				fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(cerr));
+				exit(2);
+			}
 #endif /* sum type */
-#elif COMBO
-			kmeans_combo<<<grid_blocks, block_threads>>>(d_data, d_clusters, d_membership,
-					d_clusters_members, d_clusters_sums, stream_nvectors, ndims, nclusters);
 
-			cerr = cudaMemcpyAsync(h_clusters_sums[streamid], d_clusters_sums, clusters_sums_size,
-					cudaMemcpyDeviceToHost);
-			if (cerr != cudaSuccess) {
-				fprintf(stderr, "cudamemcpy h_clusters_sums[s%d] error %s\n", streamid, cudaGetErrorString(cerr));
-				exit(2);
-			}
-			cerr = cudaMemcpyAsync(h_clusters_members[streamid], d_clusters_members, clusters_members_size,
-					cudaMemcpyDeviceToHost);
-			if (cerr != cudaSuccess) {
-				fprintf(stderr, "cudamemcpy h_clusters_members[s%d] error %s\n", streamid, cudaGetErrorString(cerr));
-				exit(2);
-			}
-			cerr = cudaStreamSynchronize(0);
-			if (cerr != cudaSuccess) {
-				fprintf(stderr, "cudastreamsync error %s\n", cudaGetErrorString(cerr));
-				exit(2);
-			}
-#endif /* run type */
-
-			clock_gettime(CLOCK_MONOTONIC, &end);
-			printf("[s%d] sum sync = %luns\n", streamid, time_diff(start, end));
-			clock_gettime(CLOCK_MONOTONIC, &start);
-
+			/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+			/*printf("[s%d] sum sync = %luns\n", streamid, time_diff(start, end));*/
+			/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 		}
-
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("[s%d] all data = %luns\n", streamid, time_diff(start, end));
-		clock_gettime(CLOCK_MONOTONIC, &start);
 
 		/* if all data for thread is processed barrier */
 		err = pthread_barrier_wait(&barrier);
@@ -322,9 +396,9 @@ kmeans_stream(void *vargs)
 			exit(1);
 		}
 
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("[s%d] barrier = %luns\n", streamid, time_diff(start, end));
-		clock_gettime(CLOCK_MONOTONIC, &start);
+		/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+		/*printf("[s%d] barrier = %luns\n", streamid, time_diff(start, end));*/
+		/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 		/* each thread computes some new cluster */
 		for (int c = start_cluster; c < start_cluster + stream_nclusters; c++) {
@@ -339,9 +413,9 @@ kmeans_stream(void *vargs)
 			}
 		}
 
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("[s%d] new clusters = %luns\n", streamid, time_diff(start, end));
-		clock_gettime(CLOCK_MONOTONIC, &start);
+		/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+		/*printf("[s%d] new clusters = %luns\n", streamid, time_diff(start, end));*/
+		/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 		if (streamid == 0) {
 			cerr = cudaMemcpy(d_clusters, h_clusters, cluster_size, cudaMemcpyHostToDevice);
@@ -351,9 +425,9 @@ kmeans_stream(void *vargs)
 			}
 		}
 
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("[s%d] memcpy clusters = %luns\n", streamid, time_diff(start, end));
-		clock_gettime(CLOCK_MONOTONIC, &start);
+		/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+		/*printf("[s%d] memcpy clusters = %luns\n", streamid, time_diff(start, end));*/
+		/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 		/* barrier for clusters to be prepared for next iter */
 		err = pthread_barrier_wait(&barrier);
@@ -362,13 +436,20 @@ kmeans_stream(void *vargs)
 			exit(1);
 		}
 
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		printf("[s%d] barrier = %luns\n", streamid, time_diff(start, end));
+		/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+		/*printf("[s%d] barrier = %luns\n", streamid, time_diff(start, end));*/
 
 		clock_gettime(CLOCK_MONOTONIC, &iter_end);
-		printf("[s%d] iter = %luns\n", streamid, time_diff(iter_start, iter_end));
+		printf("[%d] iter(%d) = %luns\n", streamid, iter, time_diff(iter_start, iter_end));
 	}
 
+#if CPU_SUM
+	cerr = cudaFree(d_membership);
+	if (cerr != cudaSuccess) {
+		fprintf(stderr, "cudafree d_membership error %s\n", cudaGetErrorString(cerr));
+		exit(2);
+	}
+#elif GPU_SUM
 	cerr = cudaFree(d_clusters_sums);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudafree d_clusters_sums error %s\n", cudaGetErrorString(cerr));
@@ -379,17 +460,20 @@ kmeans_stream(void *vargs)
 		fprintf(stderr, "cudafree d_clusters_members error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
-	cerr = cudaFree(d_membership);
-	if (cerr != cudaSuccess) {
-		fprintf(stderr, "cudafree d_membership error %s\n", cudaGetErrorString(cerr));
-		exit(2);
-	}
+#endif
 	cerr = cudaFree(d_data);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudafree d_data error %s\n", cudaGetErrorString(cerr));
 		exit(2);
 	}
 #if PINNED
+#if CPU_SUM
+	cerr = cudaFreeHost(h_membership);
+	if (cerr != cudaSuccess) {
+		fprintf(stderr, "cudafreehost h_membership error %s\n", cudaGetErrorString(cerr));
+		exit(1);
+	}
+#elif GPU_SUM
 	cerr = cudaFreeHost(h_clusters_sums[streamid]);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudafreehost h_clusters_sums[%d] error %s\n",
@@ -402,11 +486,7 @@ kmeans_stream(void *vargs)
 				streamid, cudaGetErrorString(cerr));
 		exit(1);
 	}
-	cerr = cudaFreeHost(h_membership);
-	if (cerr != cudaSuccess) {
-		fprintf(stderr, "cudafreehost h_membership error %s\n", cudaGetErrorString(cerr));
-		exit(1);
-	}
+#endif
 	cerr = cudaFreeHost(h_data);
 	if (cerr != cudaSuccess) {
 		fprintf(stderr, "cudafreehost h_data error %s\n", cudaGetErrorString(cerr));
@@ -415,7 +495,9 @@ kmeans_stream(void *vargs)
 #else
 	free(h_clusters_sums[streamid]);
 	free(h_clusters_members[streamid]);
+#if CPU_SUM
 	free(h_membership);
+#endif
 	free(h_data);
 #endif
 	return NULL;
@@ -433,9 +515,9 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 	long stream_nvectors;
 	int stream_nclusters;
 	size_t data_size, cluster_size, membership_size, clusters_members_size, clusters_sums_size;
-	struct timespec start, end;
+	/*struct timespec start, end;*/
 
-	clock_gettime(CLOCK_MONOTONIC, &start);
+	/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 	
 	/* to simplify stuff and make calculations easier... */
 	assert(nvectors  % nstreams == 0);
@@ -456,9 +538,8 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 	assert((stream_nvectors / thread_vectors) % block_threads == 0);
 	int grid_blocks = (stream_nvectors / thread_vectors) / block_threads;
 #elif (defined MAX_THREADS) || (defined COALESCE)
-	int grid_blocks = 128;
-	/*int grid_blocks = 64;*/
-	int block_threads = 16;
+	int grid_blocks = 16;
+	int block_threads = 128;
 	assert(grid_blocks * block_threads == D_THREADS);
 #elif COMBO
 #endif
@@ -506,9 +587,9 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 		return 2;
 	}
 
-	clock_gettime(CLOCK_MONOTONIC, &end);
-	printf("kmean_streams init = %luns\n", time_diff(start, end));
-	clock_gettime(CLOCK_MONOTONIC, &start);
+	/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+	/*printf("kmean_streams init = %luns\n", time_diff(start, end));*/
+	/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 	args = (struct ks_args **)malloc(nstreams * sizeof(struct ks_args *));
 	if (args == NULL) {
@@ -548,9 +629,9 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 		}
 	}
 
-	clock_gettime(CLOCK_MONOTONIC, &end);
-	printf("kmean_streams launch = %luns\n", time_diff(start, end));
-	clock_gettime(CLOCK_MONOTONIC, &start);
+	/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+	/*printf("kmean_streams launch = %luns\n", time_diff(start, end));*/
+	/*clock_gettime(CLOCK_MONOTONIC, &start);*/
 
 	for (int streamid = 0; streamid < nstreams; streamid++) {
 		err = pthread_join(streams[streamid], NULL);
@@ -560,10 +641,10 @@ kmeans_streams(long nvectors, int ndims, int nclusters, int niters, int nstreams
 		}
 	}
 
-	clock_gettime(CLOCK_MONOTONIC, &end);
-	printf("kmean_streams finished = %luns\n", time_diff(start, end));
+	/*clock_gettime(CLOCK_MONOTONIC, &end);*/
+	/*printf("kmean_streams finished = %luns\n", time_diff(start, end));*/
 
-	print_clusters(h_clusters, ndims, nclusters);
+	/*print_clusters(h_clusters, ndims, nclusters);*/
 
 	err = pthread_barrier_destroy(&barrier);
 	if (err) {
