@@ -449,14 +449,6 @@ run_kmeans(const float *h_data, const float *d_data, float *h_clusters, float *d
 			fprintf(stderr, "cudamemcpy h_clusters_members error %s\n", cudaGetErrorString(err));
 			return -1;
 		}
-
-		//update centers
-		for (int i = 0; i < nclusters; i++){
-			//printf("num of cluster memebrs %d \n", h_clusters_members[i]);
-			for (int j = 0; j < ndims; j++){
-				h_clusters[i * ndims + j] = h_clusters_sums[i * ndims + j] / h_clusters_members[i];
-			}
-		}
 #endif
 
 		for (int i = 0; i < nclusters; i++)
@@ -557,18 +549,18 @@ setup_data(float **h_data, float **d_data, float **h_clusters, float **d_cluster
 		fprintf(stderr, "malloc h_membership failed\n");
 		return -1;
 	}
-	err = cudaMalloc(&d_membership, nvectors * sizeof(int));
+	err = cudaMalloc(d_membership, nvectors * sizeof(int));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_membership error %s\n", cudaGetErrorString(err));
 		exit(2);
 	}
 #elif GPU_SUM
-	err = cudaMalloc(&d_clusters_members, nclusters * sizeof(int));
+	err = cudaMalloc(d_clusters_members, nclusters * sizeof(int));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_clusters_members error %s\n", cudaGetErrorString(err));
 		exit(2);
 	}
-	err = cudaMalloc(&d_clusters_sums, nclusters * ndims * sizeof(float));
+	err = cudaMalloc(d_clusters_sums, nclusters * ndims * sizeof(float));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "cudamalloc d_clusters_sums error %s\n", cudaGetErrorString(err));
 		exit(2);
@@ -631,14 +623,14 @@ main(int argc, char *argv[])
 	printf("kmeans = %luns\n", time_diff(start, run_end));
 	printf("runtime = %luns\n", time_diff(run_start, run_end));
 
-	free(h_data);
-	cudaFree(d_data);
-	free(h_clusters);
-	cudaFree(d_clusters);
-	free(h_membership);
-	cudaFree(d_membership);
-	free(h_clusters_members);
-	free(h_clusters_sums);
+	/*free(h_data);*/
+	/*cudaFree(d_data);*/
+	/*free(h_clusters);*/
+	/*cudaFree(d_clusters);*/
+	/*free(h_membership);*/
+	/*cudaFree(d_membership);*/
+	/*free(h_clusters_members);*/
+	/*free(h_clusters_sums);*/
 
 	cudaDeviceReset();
 	return err;
