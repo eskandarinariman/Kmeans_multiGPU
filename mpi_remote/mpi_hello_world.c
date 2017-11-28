@@ -17,6 +17,7 @@
 #include <string.h>
 #include "kmeans.h"
 
+
 char* new_filename(char * infile,int i);
 // int run_kmeans(const float *h_data, const float *d_data, float *h_clusters,
 //     float *d_clusters, int *h_membership, int *d_membership,
@@ -64,6 +65,10 @@ run_kmeans(const float *h_data, float *h_clusters,
     for (j = 0; j < ndims; j++)
       h_clusters_sums[index * ndims + j] += h_data[d * ndims + j];
   }
+      // for (int i = 0; i < nclusters; i++)
+      //   for ( int j = 0; j < ndims; j++){
+      //     printf("sum: %f\n", h_clusters_sums[(i*ndims)+j] );
+      //   }
   return 0;
 }
 
@@ -139,7 +144,8 @@ host_setup_data(float **h_data, float **h_clusters,
     }
 
     for (i = 0; i < nclusters; i++)
-      (*h_clusters_sums)[i] = 0;
+      for(j = 0 ; j < ndims ;j++)
+        (*h_clusters_sums)[i*ndims+j] = 0;
 
 
     if(world_rank == 0){
@@ -150,7 +156,8 @@ host_setup_data(float **h_data, float **h_clusters,
       }
   
       for (i = 0; i < nclusters; i++)
-        (*h_clusters_global_sums)[i] = 0;
+        for(j = 0 ; j < ndims ;j++)
+          (*h_clusters_global_sums)[i*ndims+j] = 0;
     }
 
     return 0;
@@ -247,8 +254,7 @@ host_setup_data(float **h_data, float **h_clusters,
 
   for(itr = 0 ; itr < niters ;itr++){    
     MPI_Bcast(h_clusters, nclusters *ndims, MPI_FLOAT, 0, MPI_COMM_WORLD);
-
-    printf("setup complete running kmeans...\n");
+    //printf("setup complete running kmeans...\n");
 
 
 // for (i = 0; i < nclusters; i++)
@@ -256,14 +262,50 @@ host_setup_data(float **h_data, float **h_clusters,
 //      //(*h_clusters)[i * ndims + j] = (*h_data)[i * ndims + j];
 //      printf("%f ",(h_clusters)[i * ndims + j]);
 
+    // if(world_rank == 1){
+    //   for (i = 0; i < nvectors; i++)
+    //     for (j = 0; j < ndims; j++){
+    //       printf("rank %d data: %f\n",world_rank, h_clusters[(i*ndims)+j] );
+    //     }
+    // }
 
+    if(world_rank == 1){
+      for (int i = 0; i < nvectors; i++)
+        for ( int j = 0; j < ndims; j++){
+          printf("rank %d data: %f\n",world_rank, h_data[(i*ndims)+j] );
+        }
+    }
+
+    if(world_rank == 1){
+      for (int i = 0; i < nclusters; i++)
+        for ( int j = 0; j < ndims; j++){
+          printf("rank %d clusters: %f\n",world_rank, h_clusters[(i*ndims)+j] );
+        }
+    }
+
+
+    for (int i = 0; i < nclusters; i++){
+      h_clusters_local_members[i] = 0;
+      if(world_rank == 0)
+        h_clusters_global_members[i] = 0;
+      for (int j = 0; j < ndims; j++){
+        h_clusters_local_sums[i*ndims+j] = 0;
+        if(world_rank == 0)
+          h_clusters_global_sums[i*ndims+j] = 0;
+      }
+    }
     err = run_kmeans(h_data, h_clusters, h_membership,
       h_clusters_local_members, h_clusters_local_sums, 
       nvectors, ndims, nclusters, niters);
     if (err)
       return err;
 
-
+    if(world_rank == 1){
+      for (i = 0; i < nclusters; i++)
+        for (j = 0; j < ndims; j++){
+          printf("rank 1 local sums: %f\n", h_clusters_local_sums[i*ndims+j] );
+        }
+    }
 
     MPI_Reduce(h_clusters_local_sums, h_clusters_global_sums,nclusters * ndims, MPI_FLOAT,MPI_SUM,0,MPI_COMM_WORLD);
     MPI_Reduce(h_clusters_local_members, h_clusters_global_members,nclusters, MPI_FLOAT,MPI_SUM,0,MPI_COMM_WORLD);
